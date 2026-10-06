@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="om">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Imaanaa Social</title>
+<style>
+:root{--blue:#1877f2;--bg:#f0f2f5;--muted:#65676b}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:#111}
+.nav{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid #ddd;padding:10px 16px;display:flex;justify-content:space-between;align-items:center}
+.brand{font-size:24px;font-weight:800;color:var(--blue)}
+.wrap{max-width:900px;margin:18px auto;padding:0 10px}
+.card{background:#fff;border-radius:12px;padding:15px;margin:12px 0;box-shadow:0 1px 3px #0001}
+.input,textarea,select{width:100%;padding:11px;margin:5px 0;border:1px solid #ddd;border-radius:8px}
+.btn{border:0;border-radius:8px;padding:10px 14px;margin:3px;cursor:pointer;font-weight:700}
+.primary{background:var(--blue);color:#fff}
+.green{background:#42b72a;color:#fff}
+.red{background:#e53935;color:#fff}
+.gray{background:#e4e6eb}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.status{display:inline-block;width:10px;height:10px;border-radius:50%;background:#bbb}
+.on{background:#31a24c}
+.post img,.post video{width:100%;max-height:520px;object-fit:contain;border-radius:10px;margin-top:8px}
+.tabs{display:flex;gap:5px;overflow:auto}
+.hidden{display:none!important}
+.modal{position:fixed;inset:0;background:#0008;z-index:50;display:none;align-items:center;justify-content:center}
+.modal>div{background:#fff;border-radius:14px;padding:20px;max-width:700px;width:94%}
+.chatbox{height:360px;overflow:auto;border:1px solid #ddd;border-radius:10px;padding:10px}
+.bubble{padding:8px 11px;border-radius:12px;background:#eee;margin:5px;max-width:75%}
+.mine{margin-left:auto;background:#dbeafe}
+.small{color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <div class="brand">Imaanaa Social</div>
+  <div id="head"></div>
+</div>
+
+<div class="wrap">
+  <section id="auth" class="card">
+    <h2 id="authTitle">Login</h2>
+    <input id="username" class="input" placeholder="Username">
+    <input id="password" class="input" type="password" placeholder="Password">
+    <div id="signupFields" class="hidden">
+      <input id="fullName" class="input" placeholder="Maqaa guutuu">
+      <input id="phone" class="input" placeholder="Phone">
+      <input id="city" class="input" placeholder="Magaalaa">
+      <select id="gender" class="input"><option value="">Saala</option><option>Male</option><option>Female</option></select>
+      <textarea id="bio" placeholder="Bio"></textarea>
+    </div>
+    <button class="btn primary" id="authBtn" onclick="auth()">Login</button>
+    <button class="btn gray" onclick="toggleAuth()">Signup/Login</button>
+  </section>
+
+  <section id="app" class="hidden">
+    <div class="tabs">
+      <button class="btn primary" onclick="show('home')">Home</button>
+      <button class="btn gray" onclick="show('people')">People</button>
+      <button class="btn gray" onclick="show('chat')">Chat</button>
+      <button class="btn gray" onclick="show('profile')">Profile</button>
+      <button class="btn gray" onclick="show('saved')">Saved</button>
+    </div>
+
+    <div id="vip" class="card"></div>
+
+    <div id="home">
+      <div class="card">
+        <h3>Post Haaraa</h3>
+        <textarea id="postText" placeholder="Maaltu jira?"></textarea>
+        <input id="media" type="file" accept="image/*,video/*,audio/*" class="input">
+        <button class="btn primary" onclick="createPost()">Post Godhi</button>
+        <p class="small">Postiin erga ergamee booda ilaalcha qulqullinaa keessa darba; yeroo public ta'u notification argatta.</p>
+      </div>
+      <div id="feed"></div>
+    </div>
+
+    <div id="people" class="hidden">
+      <div class="card"><h3>Maammiltoota</h3><div id="users"></div></div>
+      <div class="card"><h3>Friend Requests</h3><div id="requests"></div></div>
+    </div>
+
+    <div id="chat" class="hidden">
+      <div class="card">
+        <h3>Chat</h3>
+        <select id="chatUser" class="input" onchange="loadChat()"></select>
+        <div id="chatbox" class="chatbox"></div>
+        <div class="row">
+          <input id="chatText" class="input" style="flex:1" placeholder="Ergaa...">
+          <button class="btn primary" onclick="sendChat()">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="profile" class="hidden">
+      <div class="card">
+        <h3>Profile Edit</h3>
+        <input id="pname" class="input" placeholder="Maqaa guutuu">
+        <input id="pphone" class="input" placeholder="Phone">
+        <input id="pcity" class="input" placeholder="City">
+        <textarea id="pbio" class="input" placeholder="Bio"></textarea>
+        <input id="avatar" type="file" accept="image/*" class="input">
+        <input id="cover" type="file" accept="image/*" class="input">
+        <button class="btn green" onclick="saveProfile()">Save Profile</button>
+      </div>
+    </div>
+
+    <div id="saved" class="hidden"><div class="card"><h3>Saved Posts</h3><div id="savedFeed"></div></div></div>
+  </section>
+</div>
+
+<div id="callModal" class="modal">
+  <div>
+    <h2 id="caller"></h2>
+    <button class="btn green" onclick="acceptCall()">Accept</button>
+    <button class="btn red" onclick="rejectCall()">Reject</button>
+  </div>
+</div>
+
+<div id="callScreen" class="modal">
+  <div>
+    <h3>Call</h3>
+    <div class="row">
+      <video id="local" autoplay muted style="width:48%"></video>
+      <video id="remote" autoplay style="width:48%"></video>
+    </div>
+    <button class="btn red" onclick="endCall()">End</button>
+  </div>
+</div>
+
+<audio id="ringtone" loop src="https://actions.google.com/sounds/v1/ambiences/office_phone_ring.ogg"></audio>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
