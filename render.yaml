@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: imaanaa-social
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+
+      - key: ADMIN_USERNAME
+        sync: false
+
+      - key: ADMIN_PASSWORD
+        sync: false
+
+      - key: VIP_PHONE
+        value: "0920689815"
+
+      - key: VIP_USERNAME
+        value: "@kalifa"
