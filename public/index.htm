@@ -50,9 +50,10 @@ body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:#111}
       <input id="city" class="input" placeholder="Magaalaa">
       <select id="gender" class="input"><option value="">Saala</option><option>Male</option><option>Female</option></select>
       <textarea id="bio" placeholder="Bio"></textarea>
+      <input id="adminCode" class="input" placeholder="Admin Secret Code (Admin ta'uuf qofa postii saagaa)">
     </div>
     <button class="btn primary" id="authBtn" onclick="auth()">Login</button>
-    <button class="btn gray" onclick="toggleAuth()">Signup/Login</button>
+    <button class="btn gray" onclick="toggleAuth()">Signup/Login Jijjiiri</button>
   </section>
 
   <section id="app" class="hidden">
@@ -68,11 +69,10 @@ body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:#111}
 
     <div id="home">
       <div class="card">
-        <h3>Post Haaraa</h3>
+        <h3>Postii Haaraa</h3>
         <textarea id="postText" placeholder="Maaltu jira?"></textarea>
         <input id="media" type="file" accept="image/*,video/*,audio/*" class="input">
         <button class="btn primary" onclick="createPost()">Post Godhi</button>
-        <p class="small">Postiin erga ergamee booda ilaalcha qulqullinaa keessa darba; yeroo public ta'u notification argatta.</p>
       </div>
       <div id="feed"></div>
     </div>
@@ -96,7 +96,7 @@ body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:#111}
 
     <div id="profile" class="hidden">
       <div class="card">
-        <h3>Profile Edit</h3>
+        <h3>Edit Profile</h3>
         <input id="pname" class="input" placeholder="Maqaa guutuu">
         <input id="pphone" class="input" placeholder="Phone">
         <input id="pcity" class="input" placeholder="City">
@@ -126,7 +126,7 @@ body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:#111}
       <video id="local" autoplay muted style="width:48%"></video>
       <video id="remote" autoplay style="width:48%"></video>
     </div>
-    <button class="btn red" onclick="endCall()">End</button>
+    <button class="btn red" onclick="endCall()">End Call</button>
   </div>
 </div>
 
