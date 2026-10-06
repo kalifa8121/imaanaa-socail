@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="om">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Imaanaa Admin</title>
+<style>
+body{font-family:Arial;background:#0b141a;color:#fff;margin:0}
+.wrap{max-width:900px;margin:auto;padding:18px}
+.card{background:#111b21;border:1px solid #2a3942;border-radius:12px;padding:15px;margin:12px 0}
+input{padding:10px;margin:4px;border-radius:7px;border:1px solid #456;background:#202c33;color:#fff}
+.btn{padding:9px 13px;border:0;border-radius:7px;margin:3px;cursor:pointer}
+.green{background:#00a884;color:#fff}
+.red{background:#ea4335;color:#fff}
+.gray{background:#ddd}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🛡️ Imaanaa Admin Console</h1>
+  <div class="card">
+    <h3>Admin Login</h3>
+    <input id="u" placeholder="Admin username">
+    <input id="p" type="password" placeholder="Password">
+    <button class="btn green" onclick="login()">Login</button>
+  </div>
+
+  <div id="panel" style="display:none">
+    <div class="card">
+      <h3>Pending Posts</h3>
+      <div id="posts"></div>
+    </div>
+    <div class="card">
+      <h3>User Moderation</h3>
+      <input id="bu" placeholder="Username">
+      <input id="days" type="number" value="3" placeholder="Days">
+      <input id="reason" placeholder="Reason">
+      <button class="btn red" onclick="ban()">Ban</button>
+      <button class="btn gray" onclick="warn()">Warn</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let t = localStorage.getItem("admin_token");
+const $ = x => document.getElementById(x);
+
+async function api(u, o = {}) {
+  o.headers = { ...(o.headers || {}), Authorization: "Bearer " + t, "Content-Type": "application/json" };
+  let r = await fetch(u, o);
+  let d = await r.json();
+  if (!r.ok) throw Error(d.message || "Error");
+  return d;
+}
+
+async function login() {
+  let r = await fetch("/api/auth/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: $("u").value, password: $("p").value })
+  }).then(x => x.json());
+
+  if (!r.success || !r.user.is_admin) return alert("Admin login failed");
+  t = r.token;
+  localStorage.setItem("admin_token", t);
+  $("panel").style.display = "block";
+  load();
+}
+
+async function load() {
+  let ps = await api("/api/admin/pending-posts");
+  $("posts").innerHTML = ps.map(p => `
+    <div class="card">
+      <b>@${p.username}</b>
+      <p>${p.content || ""}</p>
+      ${p.media_url ? `<a href="${p.media_url}" target="_blank">Media</a>` : ""}
+      <br>
+      <button class="btn green" onclick="approve(${p.id})">Approve</button>
+      <button class="btn red" onclick="del(${p.id})">Delete</button>
+    </div>`).join("");
+}
+
+async function approve(id) { await api("/api/admin/approve-post", { method: "POST", body: JSON.stringify({ postId: id }) }); load(); }
+async function del(id) { await api("/api/admin/delete-post", { method: "POST", body: JSON.stringify({ postId: id }) }); load(); }
+async function ban() { await api("/api/admin/ban-user", { method: "POST", body: JSON.stringify({ username: $("bu").value, days: $("days").value, reason: $("reason").value }) }); alert("Banned"); }
+async function warn() { await api("/api/admin/warn-user", { method: "POST", body: JSON.stringify({ username: $("bu").value, reason: $("reason").value }) }); alert("Warned"); }
+
+if (t) { $("panel").style.display = "block"; load(); }
+</script>
+</body>
+</html>
