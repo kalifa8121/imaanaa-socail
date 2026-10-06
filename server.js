@@ -11,11 +11,16 @@ const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 120e6 });
 const PORT = process.env.PORT || 10000;
 
+// Database connection sanity check
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  console.error("❌ CRITICAL ERROR: process.env.DATABASE_URL is missing!");
+  process.exit(1);
+}
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL
-    ? { rejectUnauthorized: false }
-    : false
+  connectionString: connectionString,
+  ssl: { rejectUnauthorized: false }
 });
 
 app.use(express.json({ limit: "120mb" }));
@@ -141,34 +146,8 @@ async function initDB() {
       post_id INT REFERENCES posts(id) ON DELETE CASCADE,
       PRIMARY KEY(user_id,post_id)
     );
-
-    CREATE TABLE IF NOT EXISTS moderation_actions(
-      id SERIAL PRIMARY KEY,
-      admin_id INT,
-      target_user_id INT,
-      post_id INT,
-      action VARCHAR(40),
-      days INT,
-      reason TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
   `);
-
-  const adminName = process.env.ADMIN_USERNAME;
-  const adminPass = process.env.ADMIN_PASSWORD;
-
-  if (adminName && adminPass) {
-    const exists = await q("SELECT id FROM users WHERE username=$1", [adminName]);
-    if (!exists.length) {
-      const hash = await bcrypt.hash(adminPass, 12);
-      await q("INSERT INTO users(username,password,is_admin) VALUES($1,$2,TRUE)", [adminName, hash]);
-      console.log("Admin account created from environment.");
-    } else {
-      await q("UPDATE users SET is_admin=TRUE WHERE username=$1", [adminName]);
-    }
-  }
-
-  console.log("Neon database ready.");
+  console.log("Neon database tables ready.");
 }
 
 initDB().catch(e => console.error("DB INIT ERROR", e));
@@ -183,7 +162,7 @@ async function auth(req, res, next) {
 
   const u = users[0];
   if (u.banned_until && new Date(u.banned_until) > new Date()) {
-    return res.status(403).json({ success: false, message: "Account temporarily suspended" });
+    return res.status(403).json({ success: false, message: "Account suspended" });
   }
 
   req.user = u;
@@ -191,9 +170,9 @@ async function auth(req, res, next) {
   next();
 }
 
-function admin(req, res, next) {
+function adminOnly(req, res, next) {
   if (!req.user?.is_admin) {
-    return res.status(403).json({ success: false, message: "Admin only" });
+    return res.status(403).json({ success: false, message: "Admin access required" });
   }
   next();
 }
@@ -215,17 +194,21 @@ app.get("/api/config", (req, res) => {
   res.json({ vipPhone: VIP_PHONE, vipUsername: VIP_USERNAME });
 });
 
+// User & Admin Signup
 app.post("/api/auth/signup", async (req, res) => {
   try {
-    const { username, password, phone, bio, full_name, gender, city, avatar } = req.body;
+    const { username, password, phone, bio, full_name, gender, city, avatar, admin_code } = req.body;
     if (!username || !password) {
       return res.status(400).json({ success: false, message: "Username fi password guuti" });
     }
 
     const hash = await bcrypt.hash(password, 12);
+    // Code 'ADMIN123' akka admin-itti akka galmaa'aniif
+    const isAdmin = admin_code === "ADMIN123" || username === process.env.ADMIN_USERNAME;
+
     const rows = await q(
-      `INSERT INTO users (username,password,phone,bio,full_name,gender,city,avatar) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [username.trim(), hash, phone || "", bio || "", full_name || "", gender || "", city || "", avatar || ""]
+      `INSERT INTO users (username,password,phone,bio,full_name,gender,city,avatar,is_admin) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [username.trim(), hash, phone || "", bio || "", full_name || "", gender || "", city || "", avatar || "", isAdmin]
     );
 
     const t = token();
@@ -298,7 +281,8 @@ app.post("/api/posts", auth, async (req, res) => {
     `INSERT INTO posts (user_id,username,content,media_url,media_type,approved) VALUES($1,$2,$3,$4,$5,FALSE) RETURNING id`,
     [req.user.id, req.user.username, content || "", media_url || null, media_type || null]
   );
-  res.json({ success: true, message: "Post submitted", postId: rows[0].id });
+  // Postiin erga galmeessamee booda maammilli "Post submitted" qofa arga, approval-iin admin jala jira
+  res.json({ success: true, message: "Postii keessan ergameera! Qulqullinaaf erga ilaalamee booda public ta'a." });
 });
 
 app.post("/api/posts/:id/like", auth, async (req, res) => {
@@ -311,7 +295,7 @@ app.post("/api/posts/:id/like", auth, async (req, res) => {
     await q(`INSERT INTO post_likes (post_id,user_id) VALUES($1,$2)`, [pid, req.user.id]);
     await q(`UPDATE posts SET likes=likes+1 WHERE id=$1`, [pid]);
   }
-  res.json({ success: true, liked: !exists.length });
+  res.json({ success: true });
 });
 
 app.get("/api/posts/:id/comments", auth, async (req, res) => {
@@ -333,7 +317,7 @@ app.post("/api/posts/:id/save", auth, async (req, res) => {
   } else {
     await q(`INSERT INTO saved_posts (user_id,post_id) VALUES($1,$2)`, [req.user.id, req.params.id]);
   }
-  res.json({ success: true, saved: !e.length });
+  res.json({ success: true });
 });
 
 app.get("/api/saved", auth, async (req, res) => {
@@ -342,16 +326,16 @@ app.get("/api/saved", auth, async (req, res) => {
 
 app.post("/api/follow/:id", auth, async (req, res) => {
   const target = Number(req.params.id);
-  if (target === req.user.id) return res.status(400).json({ success: false, message: "Ofii kee hin follow gootu" });
+  if (target === req.user.id) return res.status(400).json({ success: false });
 
   const e = await q(`SELECT 1 FROM follows WHERE follower_id=$1 AND following_id=$2`, [req.user.id, target]);
   if (e.length) {
     await q(`DELETE FROM follows WHERE follower_id=$1 AND following_id=$2`, [req.user.id, target]);
   } else {
     await q(`INSERT INTO follows (follower_id,following_id) VALUES($1,$2)`, [req.user.id, target]);
-    await notify(target, "follow", "New follower", `@${req.user.username} followed you`, { userId: req.user.id });
+    await notify(target, "follow", "Follower Haaraa", `@${req.user.username} isin hordofaa jira`, { userId: req.user.id });
   }
-  res.json({ success: true, following: !e.length });
+  res.json({ success: true });
 });
 
 app.post("/api/friends/request/:id", auth, async (req, res) => {
@@ -359,7 +343,7 @@ app.post("/api/friends/request/:id", auth, async (req, res) => {
   const e = await q(`SELECT * FROM friend_requests WHERE sender_id=$1 AND receiver_id=$2 AND status='pending'`, [req.user.id, target]);
   if (!e.length) {
     await q(`INSERT INTO friend_requests (sender_id,receiver_id) VALUES($1,$2)`, [req.user.id, target]);
-    await notify(target, "friend_request", "Friend request", `@${req.user.username} sent you a friend request`, { userId: req.user.id });
+    await notify(target, "friend_request", "Gaaffii Dhiyoomaa", `@${req.user.username} request siif erge`, { userId: req.user.id });
   }
   res.json({ success: true });
 });
@@ -397,7 +381,7 @@ app.post("/api/chat/:userId", auth, async (req, res) => {
     }
   }
 
-  await notify(receiver, "message", "New message", `@${req.user.username} sent you a message`, { senderId: req.user.id });
+  await notify(receiver, "message", "Ergaa Haaraa", `@${req.user.username} ergaa siif erge`, { senderId: req.user.id });
   res.json({ success: true, message: rows[0] });
 });
 
@@ -405,48 +389,48 @@ app.get("/api/notifications", auth, async (req, res) => {
   res.json(await q(`SELECT * FROM notifications WHERE user_id=$1 ORDER BY id DESC LIMIT 100`, [req.user.id]));
 });
 
-// ADMIN ENDPOINTS
-app.get("/api/admin/pending-posts", auth, admin, async (req, res) => {
+// ADMIN MODERATION ENDPOINTS
+app.get("/api/admin/pending-posts", auth, adminOnly, async (req, res) => {
   res.json(await q(`SELECT p.*,u.avatar,u.full_name FROM posts p JOIN users u ON u.id=p.user_id WHERE p.approved=FALSE AND p.rejected=FALSE ORDER BY p.id ASC`));
 });
 
-app.post("/api/admin/approve-post", auth, admin, async (req, res) => {
+app.post("/api/admin/approve-post", auth, adminOnly, async (req, res) => {
   await q(`UPDATE posts SET approved=TRUE WHERE id=$1`, [req.body.postId]);
   const p = await q("SELECT user_id FROM posts WHERE id=$1", [req.body.postId]);
   if (p.length) {
-    await notify(p[0].user_id, "post_approved", "Post approved", "Your post is now public", { postId: req.body.postId });
+    await notify(p[0].user_id, "post_approved", "Postii Mirkanaa'e", "Postiin keessan public ta'eera!", { postId: req.body.postId });
   }
   res.json({ success: true });
 });
 
-app.post("/api/admin/delete-post", auth, admin, async (req, res) => {
+app.post("/api/admin/delete-post", auth, adminOnly, async (req, res) => {
   const p = await q("SELECT user_id FROM posts WHERE id=$1", [req.body.postId]);
   await q(`UPDATE posts SET rejected=TRUE WHERE id=$1`, [req.body.postId]);
   if (p.length) {
-    await notify(p[0].user_id, "post_rejected", "Post removed", "Your post did not pass moderation", { postId: req.body.postId });
+    await notify(p[0].user_id, "post_rejected", "Postii Kuffifame", "Postiin keessan seera platformii wajjin waan wal-simateef kuffifameera.", { postId: req.body.postId });
   }
   res.json({ success: true });
 });
 
-app.post("/api/admin/ban-user", auth, admin, async (req, res) => {
+app.post("/api/admin/ban-user", auth, adminOnly, async (req, res) => {
   const days = Math.max(1, Math.min(365, Number(req.body.days) || 3));
   const rows = await q("SELECT id FROM users WHERE username=$1", [req.body.username]);
   if (!rows.length) return res.status(404).json({ success: false, message: "User not found" });
 
   await q(`UPDATE users SET banned_until=NOW()+($1 || ' days')::interval WHERE id=$2`, [days, rows[0].id]);
-  await notify(rows[0].id, "moderation", "Account suspended", `Account suspended for ${days} days`, { days });
+  await notify(rows[0].id, "moderation", "Account Suspended", `Accountiin keessan guyyaa ${days}-f adabameera.`, { days });
   res.json({ success: true });
 });
 
-app.post("/api/admin/warn-user", auth, admin, async (req, res) => {
+app.post("/api/admin/warn-user", auth, adminOnly, async (req, res) => {
   const rows = await q("SELECT id FROM users WHERE username=$1", [req.body.username]);
   if (!rows.length) return res.status(404).json({ success: false, message: "User not found" });
 
-  await notify(rows[0].id, "warning", "Community warning", req.body.reason || "Please follow community rules", {});
+  await notify(rows[0].id, "warning", "Akeekkachiisa", req.body.reason || "Seeraa fi naamusa hawaasaa kabajaa.", {});
   res.json({ success: true });
 });
 
-// WEBRTC & REALTIME CALLS
+// REALTIME WEBRTC CALLS & ONLINE STATUS
 io.on("connection", socket => {
   socket.on("register-user", async ({ token: t } = {}) => {
     const uid = sessions.get(t);
@@ -457,7 +441,10 @@ io.on("connection", socket => {
     await broadcastUsers();
 
     const missed = await q(`SELECT * FROM missed_calls WHERE receiver_id=$1 AND seen=FALSE ORDER BY id DESC`, [uid]);
-    if (missed.length) socket.emit("missed-calls", missed);
+    if (missed.length) {
+      socket.emit("missed-calls", missed);
+      await q(`UPDATE missed_calls SET seen=TRUE WHERE receiver_id=$1`, [uid]);
+    }
   });
 
   socket.on("call-user", async data => {
@@ -478,7 +465,7 @@ io.on("connection", socket => {
         await q(`INSERT INTO missed_calls (caller_id,receiver_id,caller,receiver,call_type) VALUES($1,$2,$3,$4,$5)`, [
           caller.userId, r[0].id, caller.username, data.userToCall, data.isVideo ? "video" : "voice"
         ]);
-        await notify(r[0].id, "missed_call", "Missed call", `@${caller.username} called you`, { caller: caller.username, isVideo: !!data.isVideo });
+        await notify(r[0].id, "missed_call", "Missed Call", `@${caller.username} siif bilbilaa ture.`, { caller: caller.username, isVideo: !!data.isVideo });
       }
       socket.emit("call-offline", { username: data.userToCall });
     }
@@ -501,4 +488,4 @@ async function broadcastUsers() {
 
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
-server.listen(PORT, () => console.log(`Imaanaa Social running on ${PORT}`));
+server.listen(PORT, () => console.log(`Imaanaa Social running on port ${PORT}`));
