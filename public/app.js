@@ -1,254 +1,295 @@
 const socket = io();
-let token = localStorage.getItem("imaanaa_token"), me = null, isSignup = false, peer = null, stream = null, incoming = null, currentChat = null;
+let currentUser = null;
+let peerConnection;
+let localStream;
 
-const $ = id => document.getElementById(id);
+const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-// WebRTC Web Config (Google Free STUN servers for cross-network connectivity)
-const rtcConfig = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" }
-  ]
-};
+// LOGIN
+async function login() {
+  const username = document.getElementById('authUsername').value;
+  const password = document.getElementById('authPassword').value;
 
-async function api(url, opt = {}) {
-  opt.headers = { ...(opt.headers || {}), Authorization: "Bearer " + token, "Content-Type": "application/json" };
-  const r = await fetch(url, opt);
-  const d = await r.json();
-  if (!r.ok) throw Error(d.message || "Error");
-  return d;
+  const res = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  });
+  const data = await res.json();
+
+  if (data.token) {
+    localStorage.setItem('token', data.token);
+    currentUser = data.user;
+    initApp();
+  } else {
+    alert(data.error);
+  }
 }
 
-function toggleAuth() {
-  isSignup = !isSignup;
-  $("authTitle").textContent = isSignup ? "Signup" : "Login";
-  $("authBtn").textContent = isSignup ? "Signup" : "Login";
-  $("signupFields").classList.toggle("hidden", !isSignup);
+// SIGNUP
+async function signup() {
+  const username = document.getElementById('authUsername').value;
+  const password = document.getElementById('authPassword').value;
+  const full_name = document.getElementById('authName').value;
+  const email = document.getElementById('authEmail').value;
+
+  const res = await fetch('/api/signup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password, full_name, email })
+  });
+  const data = await res.json();
+  alert(data.message || data.error);
 }
 
-async function auth() {
-  try {
-    let body = { username: $("username").value, password: $("password").value };
-    if (isSignup) {
-      Object.assign(body, {
-        full_name: $("fullName").value,
-        phone: $("phone").value,
-        city: $("city").value,
-        gender: $("gender").value,
-        bio: $("bio").value,
-        admin_code: $("adminCode").value
-      });
-    }
-    const d = await fetch(isSignup ? "/api/auth/signup" : "/api/auth/login", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
-    }).then(r => r.json());
+function initApp() {
+  document.getElementById('authBox').style.display = 'none';
+  document.getElementById('appBody').style.display = 'grid';
+  document.getElementById('logoutBtn').style.display = 'block';
 
-    if (!d.success) return alert(d.message);
-    token = d.token;
-    localStorage.setItem("imaanaa_token", token);
-    me = d.user;
-    boot();
-  } catch (e) { alert(e.message); }
+  document.getElementById('userName').innerText = currentUser.full_name;
+  document.getElementById('userImg').src = currentUser.profile_pic;
+
+  socket.emit('register_user', currentUser.id);
+
+  if (currentUser.role === 'admin') {
+    document.getElementById('adminPanel').style.display = 'block';
+    loadPendingPosts();
+  }
+
+  loadUsers();
+  loadPosts();
+  loadNotifications();
 }
 
-async function boot() {
-  try {
-    const d = await api("/api/me");
-    me = d.user;
-    $("auth").classList.add("hidden");
-    $("app").classList.remove("hidden");
-    $("head").innerHTML = `@${me.username} ${me.is_admin ? "🛡️ (Admin)" : ""}<button class="btn red" onclick="logout()">Logout</button>`;
-    loadConfig(); loadPosts(); loadUsers(); loadRequests(); loadNotifications();
-    socket.emit("register-user", { token });
-  } catch (e) { localStorage.removeItem("imaanaa_token"); }
+// 3. EDIT PROFILE
+async function editProfile() {
+  const full_name = prompt("Maqaa kee haaraa:", currentUser.full_name);
+  const bio = prompt("Bio kee:", "");
+  const profile_pic = prompt("URL Fakki Profile:", currentUser.profile_pic);
+
+  if (full_name) {
+    await fetch('/api/profile', {
+      method: 'PUT',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      },
+      body: JSON.stringify({ full_name, bio, profile_pic })
+    });
+    location.reload();
+  }
 }
 
-async function logout() {
-  try { await api("/api/auth/logout", { method: "POST" }); } catch {}
-  localStorage.removeItem("imaanaa_token");
-  location.reload();
-}
-
-function show(id) {
-  ["home", "people", "chat", "profile", "saved"].forEach(x => $(x).classList.toggle("hidden", x !== id));
-  if (id === "saved") loadSaved();
-  if (id === "chat") loadUsers(true);
-}
-
-async function loadConfig() {
-  const c = await fetch("/api/config").then(r => r.json());
-  $("vip").innerHTML = `<b>⭐ VIP Status Bitachuuf</b> — Admin Phone: <b>${c.vipPhone}</b> | Admin Username: <b>${c.vipUsername}</b>`;
-}
-
-async function loadPosts() {
-  const ps = await api("/api/posts");
-  $("feed").innerHTML = ps.map(renderPost).join("");
-}
-
-function renderPost(p) {
-  let media = p.media_type === "video" ? `<video src="${p.media_url}" controls style="width:100%"></video>`
-    : p.media_type === "audio" ? `<audio src="${p.media_url}" controls style="width:100%"></audio>`
-    : p.media_url ? `<img src="${p.media_url}" style="width:100%">` : "";
-
-  return `<div class="card post">
-    <div class="row"><b>@${esc(p.username)}</b> <span class="small">${new Date(p.created_at).toLocaleString()}</span></div>
-    <p>${esc(p.content || "")}</p>
-    ${media}
-    <div style="margin-top:10px;">
-      <button class="btn gray" onclick="like(${p.id})">👍 ${p.likes || 0}</button>
-      <button class="btn gray" onclick="comment(${p.id})">💬 Comment</button>
-      <button class="btn gray" onclick="save(${p.id})">🔖 Save</button>
-      ${p.media_url ? `<a class="btn primary" href="${p.media_url}" download="media_${p.id}">⬇ Download / Save</a>` : ""}
-    </div>
-  </div>`;
-}
-
+// 4. CREATE POST
 async function createPost() {
-  const f = $("media").files[0];
-  let media_url = null, media_type = null;
-  if (f) {
-    media_url = await dataURL(f);
-    media_type = f.type.startsWith("video") ? "video" : f.type.startsWith("audio") ? "audio" : "image";
-  }
-  try {
-    const res = await api("/api/posts", { method: "POST", body: JSON.stringify({ content: $("postText").value, media_url, media_type }) });
-    $("postText").value = ""; $("media").value = "";
-    alert(res.message);
-  } catch (e) { alert(e.message); }
+  const content = document.getElementById('postContent').value;
+  const media_url = document.getElementById('mediaUrl').value;
+  const media_type = document.getElementById('mediaType').value;
+
+  const res = await fetch('/api/posts', {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${localStorage.getItem('token')}`
+    },
+    body: JSON.stringify({ content, media_url, media_type })
+  });
+
+  const data = await res.json();
+  alert(data.message); // Maammilli ERGAA POST TA'EE JIRA QOFA ARGA!
+  document.getElementById('postContent').value = '';
 }
 
-function dataURL(f) {
-  return new Promise((res, rej) => {
-    let r = new FileReader();
-    r.onload = () => res(r.result);
-    r.onerror = rej;
-    r.readAsDataURL(f);
+// LOAD POSTS WITH DOWNLOAD OPTION
+async function loadPosts() {
+  const res = await fetch('/api/posts');
+  const posts = await res.json();
+  const feed = document.getElementById('postsFeed');
+  feed.innerHTML = '';
+
+  posts.forEach(p => {
+    let mediaHtml = '';
+    if (p.media_type === 'image') {
+      mediaHtml = `<img src="${p.media_url}" style="width:100%">`;
+    } else if (p.media_type === 'video') {
+      mediaHtml = `
+        <video controls src="${p.media_url}"></video>
+        <a class="download-btn" href="${p.media_url}" download target="_blank">📥 Video Buufadhu (Download)</a>
+      `;
+    } else if (p.media_type === 'audio') {
+      mediaHtml = `
+        <audio controls src="${p.media_url}"></audio>
+        <a class="download-btn" href="${p.media_url}" download target="_blank">📥 Sagalee Buufadhu (Download)</a>
+      `;
+    }
+
+    feed.innerHTML += `
+      <div class="card">
+        <b>${p.username}</b>
+        <p>${p.content}</p>
+        ${mediaHtml}
+        <br><br>
+        <button onclick="alert('Comment ergameera!')">Comment</button>
+        <button onclick="alert('Follow godhteetta!')">Follow</button>
+      </div>
+    `;
   });
 }
 
-async function like(id) { await api("/api/posts/" + id + "/like", { method: "POST" }); loadPosts(); }
-async function save(id) { await api("/api/posts/" + id + "/save", { method: "POST" }); alert("Postiin saved ta'eera"); }
-async function comment(id) {
-  let c = prompt("Comment keessan saagaa:");
-  if (!c) return;
-  await api("/api/posts/" + id + "/comments", { method: "POST", body: JSON.stringify({ comment: c }) });
-  alert("Comment ergameera");
+// LOAD USERS (ONLINE / OFFLINE CHAT & CALL)
+async function loadUsers() {
+  const res = await fetch('/api/users', {
+    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+  });
+  const users = await res.json();
+  const list = document.getElementById('usersList');
+  list.innerHTML = '';
+
+  users.forEach(u => {
+    if (u.id !== currentUser.id) {
+      list.innerHTML += `
+        <li>
+          <span class="status-dot ${u.is_online ? 'online' : 'offline'}"></span>
+          ${u.full_name} (${u.is_online ? 'Online' : 'Offline'})
+          <button onclick="startCall(${u.id})">📞 Video Call</button>
+        </li>
+      `;
+    }
+  });
 }
 
-async function loadUsers(forChat = false) {
-  const us = await api("/api/users");
-  $("users").innerHTML = us.filter(u => u.id !== me.id).map(u => `
-    <div class="card">
-      <div class="row"><span class="status ${u.isOnline ? "on" : ""}"></span><b>@${esc(u.username)}</b> ${u.is_vip ? "⭐" : ""} <span class="small">${u.isOnline ? "🟢 Online" : "⚪ Offline"}</span></div>
-      <button class="btn primary" onclick="follow(${u.id})">Follow</button>
-      <button class="btn green" onclick="friend(${u.id})">Add Friend</button>
-      <button class="btn gray" onclick="startCall('${esc(u.username)}', true)">📹 Video Call</button>
-      <button class="btn gray" onclick="startCall('${esc(u.username)}', false)">📞 Voice Call</button>
-    </div>`).join("");
-
-  if (forChat) {
-    $("chatUser").innerHTML = us.filter(u => u.id !== me.id).map(u => `<option value="${u.id}">@${esc(u.username)} ${u.isOnline ? "🟢 Online" : "⚪ Offline"}</option>`).join("");
-    if (currentChat) $("chatUser").value = currentChat;
+// NOTIFICATIONS & MISSED CALLS
+async function loadNotifications() {
+  const res = await fetch('/api/notifications', {
+    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+  });
+  const notifs = await res.json();
+  const box = document.getElementById('notifications');
+  if (notifs.length > 0) {
+    box.innerHTML = '<h4>Beeksisa & Missed Calls:</h4>';
+    notifs.forEach(n => {
+      box.innerHTML += `<p>🔔 ${n.message} <small>(${new Date(n.created_at).toLocaleTimeString()})</small></p>`;
+    });
   }
 }
 
-async function follow(id) { await api("/api/follow/" + id, { method: "POST" }); alert("Follow status updated"); }
-async function friend(id) { await api("/api/friends/request/" + id, { method: "POST" }); alert("Friend request sent"); }
+// WEBRTC VIDEO CALL ENGINE
+async function startCall(toUserId) {
+  document.getElementById('callModal').style.display = 'flex';
+  localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  document.getElementById('localVideo').srcObject = localStream;
 
-async function loadRequests() {
-  const r = await api("/api/friends/requests");
-  $("requests").innerHTML = r.map(x => `
-    <div class="card"><b>@${esc(x.username)}</b>
-      <button class="btn green" onclick="friendAction(${x.id}, 'confirm')">Confirm</button>
-      <button class="btn red" onclick="friendAction(${x.id}, 'reject')">Reject</button>
-    </div>`).join("");
+  peerConnection = new RTCPeerConnection(config);
+  localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+  peerConnection.onicecandidate = e => {
+    if (e.candidate) socket.emit('ice_candidate', { toUserId, candidate: e.candidate });
+  };
+
+  peerConnection.ontrack = e => {
+    document.getElementById('remoteVideo').srcObject = e.streams[0];
+  };
+
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+
+  socket.emit('call_user', { toUserId, offer, callerName: currentUser.full_name });
 }
 
-async function friendAction(id, a) { await api("/api/friends/" + id + "/" + a, { method: "POST" }); loadRequests(); }
+socket.on('incoming_call', async ({ from, offer, callerName }) => {
+  document.getElementById('callModal').style.display = 'flex';
+  document.getElementById('callerNameText').innerText = `${callerName} siif bilbilaa jira...`;
 
-async function loadChat() {
-  currentChat = Number($("chatUser").value);
-  if (!currentChat) return;
-  const r = await api("/api/chat/" + currentChat);
-  $("chatbox").innerHTML = r.map(m => `
-    <div class="bubble ${m.sender_id === me.id ? "mine" : ""}">
-      <b>@${esc(m.sender_name)}</b><br>${esc(m.body || "")}
-      ${m.media_url ? `<br><a href="${m.media_url}" download>Media</a>` : ""}
-    </div>`).join("");
-  $("chatbox").scrollTop = 999999;
-}
+  document.getElementById('acceptCallBtn').onclick = async () => {
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    document.getElementById('localVideo').srcObject = localStream;
 
-async function sendChat() {
-  if (!currentChat) return alert("Maammila filadhaa");
-  const body = $("chatText").value.trim();
-  if (!body) return;
-  await api("/api/chat/" + currentChat, { method: "POST", body: JSON.stringify({ body }) });
-  $("chatText").value = "";
-  loadChat();
-}
+    peerConnection = new RTCPeerConnection(config);
+    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
-async function loadSaved() {
-  const ps = await api("/api/saved");
-  $("savedFeed").innerHTML = ps.map(renderPost).join("");
-}
+    peerConnection.onicecandidate = e => {
+      if (e.candidate) socket.emit('ice_candidate', { toUserId: from, candidate: e.candidate });
+    };
 
-async function loadNotifications() { const n = await api("/api/notifications"); }
+    peerConnection.ontrack = e => {
+      document.getElementById('remoteVideo').srcObject = e.streams[0];
+    };
 
-async function saveProfile() {
-  let avatar = me.avatar, cover = me.cover;
-  if ($("avatar").files[0]) avatar = await dataURL($("avatar").files[0]);
-  if ($("cover").files[0]) cover = await dataURL($("cover").files[0]);
+    await peerConnection.setRemoteDescription(offer);
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
 
-  const d = await api("/api/profile", {
-    method: "PUT",
-    body: JSON.stringify({ full_name: $("pname").value, phone: $("pphone").value, city: $("pcity").value, bio: $("pbio").value, avatar, cover })
-  });
-  me = d.user;
-  alert("Profile updated successfully!");
-}
-
-function esc(s) { return String(s).replace(/[&<>"']/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[m])); }
-
-socket.on("update-user-list", () => { if (!$("app").classList.contains("hidden")) loadUsers(!$("chat").classList.contains("hidden")); });
-socket.on("new-message", m => { if (currentChat === m.sender_id) loadChat(); else alert("Ergaa haaraa siif dhufe."); });
-socket.on("notification", n => { alert("🔔 " + n.title + ": " + n.body); });
-socket.on("missed-calls", cs => { if (cs.length) alert("📞 Missed calls: " + cs.map(x => "@" + x.caller).join(", ")); });
-
-async function startCall(user, isVideo) {
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo });
-    $("local").srcObject = stream;
-    $("callScreen").style.display = "flex";
-    peer = new SimplePeer({ initiator: true, trickle: false, stream, config: rtcConfig });
-    peer.on("signal", s => { socket.emit("call-user", { userToCall: user, signalData: s, callerName: me.username, isVideo }); });
-    peer.on("stream", s => { $("remote").srcObject = s; });
-  } catch (e) { alert("Camera/Microphone permission dhowwameera"); }
-}
-
-socket.on("incoming-call", d => {
-  incoming = d;
-  $("caller").textContent = "@" + d.callerName + " siif bilbilaa jira...";
-  $("callModal").style.display = "flex";
-  $("ringtone").play().catch(() => {});
+    socket.emit('answer_call', { toUserId: from, answer });
+  };
 });
 
-async function acceptCall() {
-  $("ringtone").pause(); $("callModal").style.display = "none"; $("callScreen").style.display = "flex";
-  stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: incoming.isVideo });
-  $("local").srcObject = stream;
-  peer = new SimplePeer({ initiator: false, trickle: false, stream, config: rtcConfig });
-  peer.on("signal", s => { socket.emit("accept-call", { to: incoming.from, signal: s }); });
-  peer.on("stream", s => { $("remote").srcObject = s; });
-  peer.signal(incoming.signal);
-}
+socket.on('call_answered', async ({ answer }) => {
+  await peerConnection.setRemoteDescription(answer);
+});
 
-function rejectCall() { $("ringtone").pause(); $("callModal").style.display = "none"; socket.emit("reject-call", { to: incoming.from }); }
+socket.on('ice_candidate', async ({ candidate }) => {
+  if (peerConnection) await peerConnection.addIceCandidate(candidate);
+});
+
+socket.on('user_offline', (data) => alert(data.message));
+
 function endCall() {
-  if (peer) peer.destroy();
-  if (stream) stream.getTracks().forEach(t => t.stop());
-  $("callScreen").style.display = "none";
+  if (peerConnection) peerConnection.close();
+  document.getElementById('callModal').style.display = 'none';
 }
 
-socket.on("call-offline", d => { alert("@" + d.username + " offline jira. Missed call notification galmaa'eera."); });
+// ADMIN FUNCTIONS
+async function loadPendingPosts() {
+  const res = await fetch('/api/admin/pending-posts', {
+    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+  });
+  const posts = await res.json();
+  const box = document.getElementById('pendingPosts');
+  box.innerHTML = '';
 
-if (token) boot();
+  posts.forEach(p => {
+    box.innerHTML += `
+      <div style="border-bottom:1px solid #ccc; padding:5px;">
+        <p><b>${p.username}:</b> ${p.content}</p>
+        <button onclick="approvePost(${p.id}, 'approved')">Approve</button>
+        <button onclick="approvePost(${p.id}, 'rejected')" style="background:red;">Reject</button>
+        <button onclick="warnUser(${p.user_id})" style="background:orange;">Adabi (Warn)</button>
+      </div>
+    `;
+  });
+}
+
+async function approvePost(post_id, action) {
+  await fetch('/api/admin/approve-post', {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${localStorage.getItem('token')}`
+    },
+    body: JSON.stringify({ post_id, action })
+  });
+  loadPendingPosts();
+  loadPosts();
+}
+
+async function warnUser(user_id) {
+  const days = prompt("Guyyaa meeqaf adabama (Suspended)?", "3");
+  const reason = prompt("Sababa adabbii:", "Qabiyyee seeraan ala posti gochuu");
+  if (days) {
+    await fetch('/api/admin/warn-suspend', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      },
+      body: JSON.stringify({ user_id, days: parseInt(days), reason })
+    });
+    alert("Maammilli adabameera!");
+  }
+}
+
+function logout() {
+  localStorage.clear();
+  location.reload();
+}
